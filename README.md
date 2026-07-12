@@ -16,5 +16,5 @@ cmake --build build -j
 ## Usage
 
 ```sh
-./build/nam model.nam input.wav output.wav
+./build/nam [--threads N] model.nam input.wav output.wav
 ```

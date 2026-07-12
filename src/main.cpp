@@ -1,6 +1,7 @@
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
 #include "ggml.h"
+#include <argparse/argparse.hpp>
 #include <json-c/json.h>
 
 #include <algorithm>
@@ -271,11 +272,12 @@ conv(ggml_context *c, ggml_tensor *x, const Conv &v, const Model &m,
   return y;
 }
 
-static std::vector<float> infer(const Model &m, const std::vector<float> &raw) {
+static std::vector<float> infer(const Model &m, const std::vector<float> &raw,
+                                int threads) {
   std::vector<float> padded(size_t(m.receptive - 1) + raw.size(), 0);
   std::copy(raw.begin(), raw.end(), padded.begin() + m.receptive - 1);
   ggml_backend_t backend = ggml_backend_cpu_init();
-  ggml_backend_cpu_set_n_threads(backend, 1);
+  ggml_backend_cpu_set_n_threads(backend, threads);
   ggml_init_params ip{64 * 1024 * 1024, nullptr, true};
   ggml_context *ctx = ggml_init(ip);
   if (!ctx) {
@@ -327,14 +329,26 @@ static std::vector<float> infer(const Model &m, const std::vector<float> &raw) {
 
 int main(int argc, char **argv) {
   try {
-    if (argc != 4) {
-      std::cerr << "Usage: " << argv[0] << " model.nam input.wav output.wav\n";
-      return 2;
+    argparse::ArgumentParser program("nam");
+    program.add_description("Experimental offline NAM inference using ggml");
+    program.add_argument("model").help("NAM model file");
+    program.add_argument("input").help("Mono float32 WAV input");
+    program.add_argument("output").help("Mono float32 WAV output");
+    program.add_argument("-t", "--threads")
+        .help("Number of CPU threads")
+        .scan<'i', int>()
+        .default_value(1);
+    program.parse_args(argc, argv);
+
+    int threads = program.get<int>("--threads");
+    if (threads < 1) {
+      throw std::runtime_error("Thread count must be at least 1");
     }
-    Model m = load_model(argv[1]);
-    Wav w = read_wav(argv[2]);
-    w.samples = infer(m, w.samples);
-    write_wav(argv[3], w);
+
+    Model m = load_model(program.get<std::string>("model"));
+    Wav w = read_wav(program.get<std::string>("input"));
+    w.samples = infer(m, w.samples, threads);
+    write_wav(program.get<std::string>("output"), w);
     std::cout << "Done: " << w.samples.size() << " samples, receptive field "
               << m.receptive << "\n";
   } catch (const std::exception &e) {

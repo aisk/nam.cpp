@@ -19,9 +19,17 @@ set(GGML_BLAS OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 add_subdirectory("${GGML_DIR}" "${CMAKE_BINARY_DIR}/ggml" EXCLUDE_FROM_ALL)
 
+include(FetchContent)
+FetchContent_Declare(
+    argparse
+    GIT_REPOSITORY https://github.com/p-ranav/argparse.git
+    GIT_TAG v3.2
+    GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(argparse)
+
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(JSONC REQUIRED IMPORTED_TARGET json-c)
 
 add_executable(nam src/main.cpp)
-target_link_libraries(nam PRIVATE ggml PkgConfig::JSONC)
+target_link_libraries(nam PRIVATE argparse ggml PkgConfig::JSONC)
 target_compile_options(nam PRIVATE -Wall -Wextra -Wpedantic)
