@@ -11,6 +11,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 struct Conv {
@@ -272,58 +273,130 @@ conv(ggml_context *c, ggml_tensor *x, const Conv &v, const Model &m,
   return y;
 }
 
+class GraphSession {
+public:
+  GraphSession(const Model &m, size_t input_size, int threads) {
+    backend_ = ggml_backend_cpu_init();
+    if (!backend_) {
+      throw std::runtime_error("Failed to initialize the ggml CPU backend");
+    }
+    ggml_backend_cpu_set_n_threads(backend_, threads);
+    ggml_init_params ip{64 * 1024 * 1024, nullptr, true};
+    ctx_ = ggml_init(ip);
+    if (!ctx_) {
+      throw std::runtime_error("ggml_init failed");
+    }
+
+    input_ = ggml_new_tensor_2d(ctx_, GGML_TYPE_F32, input_size, 1);
+    ggml_tensor *x = input_, *condition = input_, *head_sum = nullptr;
+    for (const auto &a : m.arrays) {
+      x = conv(ctx_, x, a.rechannel, m, loads_);
+      int out_no_head = int(std::min(x->ne[0], condition->ne[0]) -
+                            (a.receptive - a.head.kernel));
+      for (const auto &l : a.layers) {
+        auto *z = conv(ctx_, x, l.conv, m, loads_);
+        auto *mix =
+            right(ctx_, conv(ctx_, condition, l.mixer, m, loads_), z->ne[0]);
+        z = ggml_add(ctx_, z, mix);
+        z = (l.activation == "ReLU") ? ggml_relu(ctx_, z)
+                                      : ggml_tanh(ctx_, z);
+        auto *term = right(ctx_, z, out_no_head);
+        head_sum = head_sum
+                       ? ggml_add(ctx_, right(ctx_, head_sum, out_no_head), term)
+                       : term;
+        auto *res = conv(ctx_, z, l.layer1x1, m, loads_);
+        x = ggml_add(ctx_, right(ctx_, x, res->ne[0]), res);
+      }
+      head_sum = conv(ctx_, head_sum, a.head, m, loads_);
+      x = right(ctx_, x, head_sum->ne[0]);
+    }
+    output_ = ggml_scale(ctx_, head_sum, m.head_scale);
+    graph_ = ggml_new_graph_custom(ctx_, 4096, false);
+    ggml_build_forward_expand(graph_, output_);
+    buffer_ = ggml_backend_alloc_ctx_tensors(ctx_, backend_);
+    if (!buffer_) {
+      throw std::runtime_error("Failed to allocate the ggml backend buffer");
+    }
+    for (const auto &p : loads_) {
+      ggml_backend_tensor_set(p.first, p.second, 0, ggml_nbytes(p.first));
+    }
+  }
+
+  GraphSession(const GraphSession &) = delete;
+  GraphSession &operator=(const GraphSession &) = delete;
+
+  ~GraphSession() {
+    if (buffer_) {
+      ggml_backend_buffer_free(buffer_);
+    }
+    if (ctx_) {
+      ggml_free(ctx_);
+    }
+    if (backend_) {
+      ggml_backend_free(backend_);
+    }
+  }
+
+  void compute(const float *input, size_t input_size, float *output,
+               size_t output_size) {
+    if (input_size != size_t(input_->ne[0]) ||
+        output_size > size_t(output_->ne[0])) {
+      throw std::runtime_error("GraphSession buffer size mismatch");
+    }
+    ggml_backend_tensor_set(input_, input, 0, input_size * sizeof(float));
+    if (ggml_backend_graph_compute(backend_, graph_) != GGML_STATUS_SUCCESS) {
+      throw std::runtime_error("ggml graph computation failed");
+    }
+    ggml_backend_tensor_get(output_, output, 0, output_size * sizeof(float));
+  }
+
+private:
+  ggml_backend_t backend_ = nullptr;
+  ggml_context *ctx_ = nullptr;
+  ggml_backend_buffer_t buffer_ = nullptr;
+  ggml_cgraph *graph_ = nullptr;
+  ggml_tensor *input_ = nullptr;
+  ggml_tensor *output_ = nullptr;
+  std::vector<std::pair<ggml_tensor *, const float *>> loads_;
+};
+
 static std::vector<float> infer(const Model &m, const std::vector<float> &raw,
                                 int threads) {
   std::vector<float> padded(size_t(m.receptive - 1) + raw.size(), 0);
   std::copy(raw.begin(), raw.end(), padded.begin() + m.receptive - 1);
-  ggml_backend_t backend = ggml_backend_cpu_init();
-  ggml_backend_cpu_set_n_threads(backend, threads);
-  ggml_init_params ip{64 * 1024 * 1024, nullptr, true};
-  ggml_context *ctx = ggml_init(ip);
-  if (!ctx) {
-    throw std::runtime_error("ggml_init failed");
-  }
-  std::vector<std::pair<ggml_tensor *, const float *>> loads;
-  auto *input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, padded.size(), 1);
-  loads.push_back({input, padded.data()});
-  ggml_tensor *x = input, *condition = input, *head_sum = nullptr;
-  for (const auto &a : m.arrays) {
-    x = conv(ctx, x, a.rechannel, m, loads);
-    int out_no_head = int(std::min(x->ne[0], condition->ne[0]) -
-                          (a.receptive - a.head.kernel));
-    for (const auto &l : a.layers) {
-      auto *z = conv(ctx, x, l.conv, m, loads);
-      auto *mix = right(ctx, conv(ctx, condition, l.mixer, m, loads), z->ne[0]);
-      z = ggml_add(ctx, z, mix);
-      z = (l.activation == "ReLU") ? ggml_relu(ctx, z) : ggml_tanh(ctx, z);
-      auto *term = right(ctx, z, out_no_head);
-      head_sum = head_sum
-                     ? ggml_add(ctx, right(ctx, head_sum, out_no_head), term)
-                     : term;
-      auto *res = conv(ctx, z, l.layer1x1, m, loads);
-      x = ggml_add(ctx, right(ctx, x, res->ne[0]), res);
-    }
-    head_sum = conv(ctx, head_sum, a.head, m, loads);
-    x = right(ctx, x, head_sum->ne[0]);
-  }
-  head_sum = ggml_scale(ctx, head_sum, m.head_scale);
-  ggml_cgraph *graph = ggml_new_graph_custom(ctx, 4096, false);
-  ggml_build_forward_expand(graph, head_sum);
-  ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
-  if (!buffer) {
-    throw std::runtime_error("Failed to allocate the ggml backend buffer");
-  }
-  for (auto &p : loads) {
-    ggml_backend_tensor_set(p.first, p.second, 0, ggml_nbytes(p.first));
-  }
-  if (ggml_backend_graph_compute(backend, graph) != GGML_STATUS_SUCCESS) {
-    throw std::runtime_error("ggml graph computation failed");
-  }
+  GraphSession session(m, padded.size(), threads);
   std::vector<float> out(raw.size());
-  ggml_backend_tensor_get(head_sum, out.data(), 0, out.size() * sizeof(float));
-  ggml_backend_buffer_free(buffer);
-  ggml_free(ctx);
-  ggml_backend_free(backend);
+  session.compute(padded.data(), padded.size(), out.data(), out.size());
+  return out;
+}
+
+static std::vector<float> infer_streaming(const Model &m,
+                                          const std::vector<float> &raw,
+                                          int threads, size_t block_size) {
+  const size_t history_size = size_t(m.receptive - 1);
+  std::vector<float> history(history_size, 0.0f);
+  std::vector<float> input(history_size + block_size, 0.0f);
+  std::vector<float> out(raw.size());
+  GraphSession session(m, input.size(), threads);
+
+  for (size_t offset = 0; offset < raw.size(); offset += block_size) {
+    const size_t n = std::min(block_size, raw.size() - offset);
+    std::copy(history.begin(), history.end(), input.begin());
+    std::copy_n(raw.data() + offset, n, input.data() + history_size);
+    std::fill(input.begin() + history_size + n, input.end(), 0.0f);
+    session.compute(input.data(), input.size(), out.data() + offset, n);
+
+    if (history_size == 0) {
+      continue;
+    }
+    if (n >= history_size) {
+      std::copy_n(raw.data() + offset + n - history_size, history_size,
+                  history.data());
+    } else {
+      std::move(history.begin() + n, history.end(), history.begin());
+      std::copy_n(raw.data() + offset, n, history.end() - n);
+    }
+  }
   return out;
 }
 
@@ -338,16 +411,28 @@ int main(int argc, char **argv) {
         .help("Number of CPU threads")
         .scan<'i', int>()
         .default_value(1);
+    program.add_argument("--stream-block")
+        .help("Process using a reusable streaming graph with this block size; "
+              "0 keeps whole-file offline inference")
+        .scan<'i', int>()
+        .default_value(0);
     program.parse_args(argc, argv);
 
     int threads = program.get<int>("--threads");
     if (threads < 1) {
       throw std::runtime_error("Thread count must be at least 1");
     }
+    int stream_block = program.get<int>("--stream-block");
+    if (stream_block < 0) {
+      throw std::runtime_error("Streaming block size must not be negative");
+    }
 
     Model m = load_model(program.get<std::string>("model"));
     Wav w = read_wav(program.get<std::string>("input"));
-    w.samples = infer(m, w.samples, threads);
+    w.samples = stream_block == 0
+                    ? infer(m, w.samples, threads)
+                    : infer_streaming(m, w.samples, threads,
+                                      size_t(stream_block));
     write_wav(program.get<std::string>("output"), w);
     std::cout << "Done: " << w.samples.size() << " samples, receptive field "
               << m.receptive << "\n";
