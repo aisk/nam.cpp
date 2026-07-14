@@ -30,6 +30,10 @@ FetchContent_MakeAvailable(argparse)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(JSONC REQUIRED IMPORTED_TARGET json-c)
 
-add_executable(nam src/main.cpp)
+add_executable(nam
+    src/inference.cpp
+    src/main.cpp
+    src/model.cpp
+    src/wav.cpp)
 target_link_libraries(nam PRIVATE argparse ggml PkgConfig::JSONC)
 target_compile_options(nam PRIVATE -Wall -Wextra -Wpedantic)
