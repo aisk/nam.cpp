@@ -2,12 +2,14 @@
 
 #include <json-c/json.h>
 
-#include <stdexcept>
+#include <cstdio>
+#include <cstdlib>
 
 static json_object *get(json_object *o, const char *key) {
   json_object *v = nullptr;
   if (!json_object_object_get_ex(o, key, &v)) {
-    throw std::runtime_error(std::string("Missing field: ") + key);
+    std::fprintf(stderr, "Missing field: %s\n", key);
+    std::abort();
   }
   return v;
 }
@@ -28,7 +30,8 @@ static std::string js(json_object *v) {
   if (json_object_is_type(v, json_type_string)) {
     return json_object_get_string(v);
   }
-  throw std::runtime_error("Only string activation values are supported");
+  std::fprintf(stderr, "Only string activation values are supported\n");
+  std::abort();
 }
 
 static void take(Conv &c, size_t &p) {
@@ -39,7 +42,8 @@ static void take(Conv &c, size_t &p) {
 Model load_model(const std::string &path) {
   json_object *root = json_object_from_file(path.c_str());
   if (!root) {
-    throw std::runtime_error("Failed to parse NAM JSON: " + path);
+    std::fprintf(stderr, "Failed to parse NAM JSON: %s\n", path.c_str());
+    std::abort();
   }
 
   struct Guard {
@@ -49,7 +53,8 @@ Model load_model(const std::string &path) {
   } guard{root};
 
   if (js(get(root, "architecture")) != "WaveNet") {
-    throw std::runtime_error("Only the A1 WaveNet architecture is supported");
+    std::fprintf(stderr, "Only the A1 WaveNet architecture is supported\n");
+    std::abort();
   }
   json_object *cfg = get(root, "config"), *wa = get(root, "weights"),
               *as = get(cfg, "layers");
@@ -69,19 +74,23 @@ Model load_model(const std::string &path) {
         ch = ji(a, "channels"), bottleneck = ji(a, "bottleneck", ch);
     if (cond != 1 || ji(a, "groups_input", 1) != 1 ||
         ji(a, "groups_input_mixin", 1) != 1) {
-      throw std::runtime_error(
-          "Only mono conditioning and groups=1 are supported");
+      std::fprintf(stderr,
+                   "Only mono conditioning and groups=1 are supported\n");
+      std::abort();
     }
     json_object *act = get(a, "activation");
     if (json_object_is_type(act, json_type_array)) {
-      throw std::runtime_error("Per-layer activation lists are not supported");
+      std::fprintf(stderr, "Per-layer activation lists are not supported\n");
+      std::abort();
     }
     std::string activation = js(act);
     if (activation != "ReLU" && activation != "Tanh") {
-      throw std::runtime_error("Only ReLU and Tanh activations are supported");
+      std::fprintf(stderr, "Only ReLU and Tanh activations are supported\n");
+      std::abort();
     }
     if (jb(a, "gated", false)) {
-      throw std::runtime_error("Gated activations are not supported");
+      std::fprintf(stderr, "Gated activations are not supported\n");
+      std::abort();
     }
     Array ar;
     ar.rechannel = {input, ch, 1, 1, false, 0};
@@ -116,11 +125,11 @@ Model load_model(const std::string &path) {
     m.arrays.push_back(ar);
   }
   if (p + 1 != m.weights.size()) {
-    throw std::runtime_error(
-        "Weight count does not match the classic A1 layout "
-        "(expected " +
-        std::to_string(p + 1) + ", got " + std::to_string(m.weights.size()) +
-        ")");
+    std::fprintf(stderr,
+                 "Weight count does not match the classic A1 layout "
+                 "(expected %zu, got %zu)\n",
+                 p + 1, m.weights.size());
+    std::abort();
   }
   m.head_scale = m.weights[p];
   return m;

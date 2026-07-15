@@ -1,8 +1,9 @@
 #include "wav.h"
 
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
-#include <stdexcept>
 
 static uint32_t u32(std::istream &f) {
   uint32_t v;
@@ -24,7 +25,8 @@ Wav read_wav(const std::string &path) {
   char wave[4];
   f.read(wave, 4);
   if (!f || std::memcmp(id, "RIFF", 4) || std::memcmp(wave, "WAVE", 4)) {
-    throw std::runtime_error("Input is not a RIFF/WAVE file");
+    std::fprintf(stderr, "Input is not a RIFF/WAVE file\n");
+    std::abort();
   }
   uint16_t format = 0, channels = 0, bits = 0;
   uint32_t rate = 0;
@@ -53,7 +55,8 @@ Wav read_wav(const std::string &path) {
     f.seekg(next);
   }
   if (format != 3 || channels != 1 || bits != 32 || data.empty()) {
-    throw std::runtime_error("Input must be a mono IEEE float32 WAV file");
+    std::fprintf(stderr, "Input must be a mono IEEE float32 WAV file\n");
+    std::abort();
   }
 
   Wav w{rate, std::vector<float>(data.size() / 4)};

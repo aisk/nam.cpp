@@ -5,7 +5,8 @@
 #include "ggml.h"
 
 #include <algorithm>
-#include <stdexcept>
+#include <cstdio>
+#include <cstdlib>
 #include <utility>
 
 static ggml_tensor *right(ggml_context *c, ggml_tensor *x, int64_t n) {
@@ -51,13 +52,15 @@ struct GraphSession {
   GraphSession(const Model &m, size_t input_size, int threads) {
     backend = ggml_backend_cpu_init();
     if (!backend) {
-      throw std::runtime_error("Failed to initialize the ggml CPU backend");
+      std::fprintf(stderr, "Failed to initialize the ggml CPU backend\n");
+      std::abort();
     }
     ggml_backend_cpu_set_n_threads(backend, threads);
     ggml_init_params ip{64 * 1024 * 1024, nullptr, true};
     ctx = ggml_init(ip);
     if (!ctx) {
-      throw std::runtime_error("ggml_init failed");
+      std::fprintf(stderr, "ggml_init failed\n");
+      std::abort();
     }
 
     input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, input_size, 1);
@@ -87,7 +90,8 @@ struct GraphSession {
     ggml_build_forward_expand(graph, output);
     buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
     if (!buffer) {
-      throw std::runtime_error("Failed to allocate the ggml backend buffer");
+      std::fprintf(stderr, "Failed to allocate the ggml backend buffer\n");
+      std::abort();
     }
     for (const auto &p : loads) {
       ggml_backend_tensor_set(p.first, p.second, 0, ggml_nbytes(p.first));
@@ -115,11 +119,13 @@ static void graph_compute(GraphSession &s, const float *input,
                           size_t output_size) {
   if (input_size != size_t(s.input->ne[0]) ||
       output_size > size_t(s.output->ne[0])) {
-    throw std::runtime_error("GraphSession buffer size mismatch");
+    std::fprintf(stderr, "GraphSession buffer size mismatch\n");
+    std::abort();
   }
   ggml_backend_tensor_set(s.input, input, 0, input_size * sizeof(float));
   if (ggml_backend_graph_compute(s.backend, s.graph) != GGML_STATUS_SUCCESS) {
-    throw std::runtime_error("ggml graph computation failed");
+    std::fprintf(stderr, "ggml graph computation failed\n");
+    std::abort();
   }
   ggml_backend_tensor_get(s.output, output, 0, output_size * sizeof(float));
 }

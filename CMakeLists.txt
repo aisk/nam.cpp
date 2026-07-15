@@ -37,3 +37,6 @@ add_executable(nam
     src/wav.cpp)
 target_link_libraries(nam PRIVATE argparse ggml PkgConfig::JSONC)
 target_compile_options(nam PRIVATE -Wall -Wextra -Wpedantic)
+set_source_files_properties(
+    src/inference.cpp src/model.cpp src/wav.cpp
+    PROPERTIES COMPILE_OPTIONS -fno-exceptions)
