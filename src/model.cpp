@@ -14,19 +14,19 @@ static json_object *get(json_object *o, const char *key) {
   return v;
 }
 
-static int ji(json_object *o, const char *key, int fallback = -1) {
+static int get_int(json_object *o, const char *key, int fallback = -1) {
   json_object *v = nullptr;
   return json_object_object_get_ex(o, key, &v) ? json_object_get_int(v)
-                                               : fallback;
+                                                : fallback;
 }
 
-static bool jb(json_object *o, const char *key, bool fallback) {
+static bool get_bool(json_object *o, const char *key, bool fallback) {
   json_object *v = nullptr;
   return json_object_object_get_ex(o, key, &v) ? json_object_get_boolean(v)
-                                               : fallback;
+                                                : fallback;
 }
 
-static std::string js(json_object *v) {
+static std::string get_str(json_object *v) {
   if (json_object_is_type(v, json_type_string)) {
     return json_object_get_string(v);
   }
@@ -52,7 +52,7 @@ Model load_model(const std::string &path) {
     ~Guard() { json_object_put(p); }
   } guard{root};
 
-  if (js(get(root, "architecture")) != "WaveNet") {
+  if (get_str(get(root, "architecture")) != "WaveNet") {
     std::fprintf(stderr, "Only the A1 WaveNet architecture is supported\n");
     std::abort();
   }
@@ -70,10 +70,10 @@ Model load_model(const std::string &path) {
     json_object *ds = get(a, "dilations");
     json_object *hc = nullptr;
     json_object_object_get_ex(a, "head", &hc);
-    int input = ji(a, "input_size"), cond = ji(a, "condition_size"),
-        ch = ji(a, "channels"), bottleneck = ji(a, "bottleneck", ch);
-    if (cond != 1 || ji(a, "groups_input", 1) != 1 ||
-        ji(a, "groups_input_mixin", 1) != 1) {
+    int input = get_int(a, "input_size"), cond = get_int(a, "condition_size"),
+        ch = get_int(a, "channels"), bottleneck = get_int(a, "bottleneck", ch);
+    if (cond != 1 || get_int(a, "groups_input", 1) != 1 ||
+        get_int(a, "groups_input_mixin", 1) != 1) {
       std::fprintf(stderr,
                    "Only mono conditioning and groups=1 are supported\n");
       std::abort();
@@ -83,19 +83,19 @@ Model load_model(const std::string &path) {
       std::fprintf(stderr, "Per-layer activation lists are not supported\n");
       std::abort();
     }
-    std::string activation = js(act);
+    std::string activation = get_str(act);
     if (activation != "ReLU" && activation != "Tanh") {
       std::fprintf(stderr, "Only ReLU and Tanh activations are supported\n");
       std::abort();
     }
-    if (jb(a, "gated", false)) {
+    if (get_bool(a, "gated", false)) {
       std::fprintf(stderr, "Gated activations are not supported\n");
       std::abort();
     }
     Array ar;
     ar.rechannel = {input, ch, 1, 1, false, 0};
     ar.rechannel.take(p);
-    int common_k = ji(a, "kernel_size", -1);
+    int common_k = get_int(a, "kernel_size", -1);
     json_object *ks = nullptr;
     json_object_object_get_ex(a, "kernel_sizes", &ks);
     for (size_t li = 0; li < json_object_array_length(ds); ++li) {
@@ -113,11 +113,11 @@ Model load_model(const std::string &path) {
       ar.receptive += (k - 1) * d;
     }
     if (hc != nullptr) {
-      ar.head = {bottleneck, ji(hc, "out_channels"), ji(hc, "kernel_size"),
-                 1,          jb(hc, "bias", false),  0};
+      ar.head = {bottleneck, get_int(hc, "out_channels"), get_int(hc, "kernel_size"),
+                 1,           get_bool(hc, "bias", false), 0};
     } else {
-      ar.head = {bottleneck, ji(a, "head_size"),        1,
-                 1,          jb(a, "head_bias", false), 0};
+      ar.head = {bottleneck, get_int(a, "head_size"),     1,
+                 1,           get_bool(a, "head_bias", false), 0};
     }
     ar.head.take(p);
     ar.receptive += ar.head.kernel - 1;
