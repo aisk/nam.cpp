@@ -8,6 +8,8 @@ struct Conv {
   int in, out, kernel, dilation;
   bool bias;
   size_t offset;
+
+  void take(size_t &p);
 };
 
 struct Layer {

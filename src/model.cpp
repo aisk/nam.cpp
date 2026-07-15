@@ -34,9 +34,9 @@ static std::string js(json_object *v) {
   std::abort();
 }
 
-static void take(Conv &c, size_t &p) {
-  c.offset = p;
-  p += size_t(c.in) * c.out * c.kernel + (c.bias ? c.out : 0);
+void Conv::take(size_t &p) {
+  offset = p;
+  p += size_t(in) * out * kernel + (bias ? out : 0);
 }
 
 Model load_model(const std::string &path) {
@@ -94,7 +94,7 @@ Model load_model(const std::string &path) {
     }
     Array ar;
     ar.rechannel = {input, ch, 1, 1, false, 0};
-    take(ar.rechannel, p);
+    ar.rechannel.take(p);
     int common_k = ji(a, "kernel_size", -1);
     json_object *ks = nullptr;
     json_object_object_get_ex(a, "kernel_sizes", &ks);
@@ -106,9 +106,9 @@ Model load_model(const std::string &path) {
               {cond, bottleneck, 1, 1, false, 0},
               {bottleneck, ch, 1, 1, true, 0},
               activation};
-      take(l.conv, p);
-      take(l.mixer, p);
-      take(l.layer1x1, p);
+      l.conv.take(p);
+      l.mixer.take(p);
+      l.layer1x1.take(p);
       ar.layers.push_back(l);
       ar.receptive += (k - 1) * d;
     }
@@ -119,7 +119,7 @@ Model load_model(const std::string &path) {
       ar.head = {bottleneck, ji(a, "head_size"),        1,
                  1,          jb(a, "head_bias", false), 0};
     }
-    take(ar.head, p);
+    ar.head.take(p);
     ar.receptive += ar.head.kernel - 1;
     m.receptive += ar.receptive - 1;
     m.arrays.push_back(ar);

@@ -7,7 +7,8 @@
 struct Wav {
   uint32_t rate;
   std::vector<float> samples;
+
+  void write(const std::string &path) const;
 };
 
 Wav read_wav(const std::string &path);
-void write_wav(const std::string &path, const Wav &w);

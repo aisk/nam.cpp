@@ -101,6 +101,21 @@ struct GraphSession {
   GraphSession(const GraphSession &) = delete;
   GraphSession &operator=(const GraphSession &) = delete;
 
+  void compute(const float *in, size_t input_size, float *out,
+               size_t output_size) {
+    if (input_size != size_t(input->ne[0]) ||
+        output_size > size_t(output->ne[0])) {
+      std::fprintf(stderr, "GraphSession buffer size mismatch\n");
+      std::abort();
+    }
+    ggml_backend_tensor_set(input, in, 0, input_size * sizeof(float));
+    if (ggml_backend_graph_compute(backend, graph) != GGML_STATUS_SUCCESS) {
+      std::fprintf(stderr, "ggml graph computation failed\n");
+      std::abort();
+    }
+    ggml_backend_tensor_get(output, out, 0, output_size * sizeof(float));
+  }
+
   ~GraphSession() {
     if (buffer) {
       ggml_backend_buffer_free(buffer);
@@ -114,29 +129,13 @@ struct GraphSession {
   }
 };
 
-static void graph_compute(GraphSession &s, const float *input,
-                          size_t input_size, float *output,
-                          size_t output_size) {
-  if (input_size != size_t(s.input->ne[0]) ||
-      output_size > size_t(s.output->ne[0])) {
-    std::fprintf(stderr, "GraphSession buffer size mismatch\n");
-    std::abort();
-  }
-  ggml_backend_tensor_set(s.input, input, 0, input_size * sizeof(float));
-  if (ggml_backend_graph_compute(s.backend, s.graph) != GGML_STATUS_SUCCESS) {
-    std::fprintf(stderr, "ggml graph computation failed\n");
-    std::abort();
-  }
-  ggml_backend_tensor_get(s.output, output, 0, output_size * sizeof(float));
-}
-
 std::vector<float> infer(const Model &m, const std::vector<float> &raw,
                          int threads) {
   std::vector<float> padded(size_t(m.receptive - 1) + raw.size(), 0);
   std::copy(raw.begin(), raw.end(), padded.begin() + m.receptive - 1);
   GraphSession session(m, padded.size(), threads);
   std::vector<float> out(raw.size());
-  graph_compute(session, padded.data(), padded.size(), out.data(), out.size());
+  session.compute(padded.data(), padded.size(), out.data(), out.size());
   return out;
 }
 
@@ -154,7 +153,7 @@ std::vector<float> infer_streaming(const Model &m,
     std::copy(history.begin(), history.end(), input.begin());
     std::copy_n(raw.data() + offset, n, input.data() + history_size);
     std::fill(input.begin() + history_size + n, input.end(), 0.0f);
-    graph_compute(session, input.data(), input.size(), out.data() + offset, n);
+    session.compute(input.data(), input.size(), out.data() + offset, n);
 
     if (history_size == 0) {
       continue;

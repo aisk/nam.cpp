@@ -43,7 +43,7 @@ int main(int argc, char **argv) {
                   ? infer(m, w.samples, threads)
                   : infer_streaming(m, w.samples, threads,
                                     size_t(stream_block));
-  write_wav(program.get<std::string>("output"), w);
+  w.write(program.get<std::string>("output"));
   std::cout << "Done: " << w.samples.size() << " samples, receptive field "
             << m.receptive << "\n";
 }

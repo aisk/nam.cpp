@@ -64,22 +64,22 @@ Wav read_wav(const std::string &path) {
   return w;
 }
 
-void write_wav(const std::string &path, const Wav &w) {
+void Wav::write(const std::string &path) const {
   std::ofstream f(path, std::ios::binary);
-  uint32_t bytes = uint32_t(w.samples.size() * 4), riff = 36 + bytes;
+  uint32_t bytes = uint32_t(samples.size() * 4), riff = 36 + bytes;
   uint16_t one = 1, fmt = 3, bits = 32, align = 4;
-  uint32_t br = w.rate * 4, fs = 16;
+  uint32_t br = rate * 4, fs = 16;
   f.write("RIFF", 4);
   f.write((char *)&riff, 4);
   f.write("WAVEfmt ", 8);
   f.write((char *)&fs, 4);
   f.write((char *)&fmt, 2);
   f.write((char *)&one, 2);
-  f.write((char *)&w.rate, 4);
+  f.write((char *)&rate, 4);
   f.write((char *)&br, 4);
   f.write((char *)&align, 2);
   f.write((char *)&bits, 2);
   f.write("data", 4);
   f.write((char *)&bytes, 4);
-  f.write((char *)w.samples.data(), bytes);
+  f.write((char *)samples.data(), bytes);
 }
