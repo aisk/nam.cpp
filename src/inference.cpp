@@ -202,6 +202,22 @@ struct GraphSession {
   }
 };
 
+StreamSession::StreamSession(const Model &m, size_t block_size, int threads)
+    : impl(new GraphSession(m, block_size, threads, true)), block(block_size) {
+  // Deep activations of an all-zero history are nonzero (biases), so warm the
+  // caches by streaming receptive-1 zeros; this matches the offline padding.
+  std::vector<float> zeros(block, 0.0f), discard(block);
+  for (size_t warmed = 0; warmed < size_t(m.receptive - 1); warmed += block) {
+    impl->compute(zeros.data(), block, discard.data(), block);
+  }
+}
+
+StreamSession::~StreamSession() = default;
+
+void StreamSession::process(const float *in, float *out) {
+  impl->compute(in, block, out, block);
+}
+
 std::vector<float> infer(const Model &m, const std::vector<float> &raw,
                          int threads) {
   std::vector<float> padded(size_t(m.receptive - 1) + raw.size(), 0);
@@ -215,23 +231,18 @@ std::vector<float> infer(const Model &m, const std::vector<float> &raw,
 std::vector<float> infer_streaming(const Model &m,
                                    const std::vector<float> &raw, int threads,
                                    size_t block_size) {
-  GraphSession session(m, block_size, threads, true);
-  std::vector<float> block(block_size, 0.0f);
+  StreamSession session(m, block_size, threads);
   std::vector<float> out(raw.size());
-
-  // Deep activations of an all-zero history are nonzero (biases), so warm the
-  // caches by streaming receptive-1 zeros; this matches the offline padding.
-  std::vector<float> discard(block_size);
-  for (size_t warmed = 0; warmed < size_t(m.receptive - 1);
-       warmed += block_size) {
-    session.compute(block.data(), block_size, discard.data(), block_size);
-  }
-
   for (size_t offset = 0; offset < raw.size(); offset += block_size) {
     const size_t n = std::min(block_size, raw.size() - offset);
-    std::copy_n(raw.data() + offset, n, block.begin());
-    std::fill(block.begin() + n, block.end(), 0.0f);
-    session.compute(block.data(), block_size, out.data() + offset, n);
+    if (n == block_size) {
+      session.process(raw.data() + offset, out.data() + offset);
+    } else {
+      std::vector<float> padded(block_size, 0.0f), tail(block_size);
+      std::copy_n(raw.data() + offset, n, padded.begin());
+      session.process(padded.data(), tail.data());
+      std::copy_n(tail.begin(), n, out.begin() + offset);
+    }
   }
   return out;
 }
