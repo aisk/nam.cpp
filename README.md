@@ -18,11 +18,11 @@ cmake --build build -j
 ## Usage
 
 ```sh
-./build/nam [--threads N] [--stream-block N] model.nam input.wav output.wav
+./build/nam [-t N] [-b N] model.nam input.wav output.wav
 ```
 
-By default, the complete file is processed in one offline graph. Passing a positive `--stream-block` size uses a reusable fixed-size graph and carries the model's input history between blocks. This bounds inference memory while producing the same causal output; for example:
+By default, the complete file is processed in one offline graph. Passing a positive `-b`/`--block` size uses a reusable fixed-size graph and carries the model's input history between blocks. This bounds inference memory while producing the same causal output; for example:
 
 ```sh
-./build/nam --stream-block 65536 model.nam input.wav output.wav
+./build/nam --block 65536 model.nam input.wav output.wav
 ```

@@ -21,11 +21,11 @@ add_subdirectory("${GGML_DIR}" "${CMAKE_BINARY_DIR}/ggml" EXCLUDE_FROM_ALL)
 
 include(FetchContent)
 FetchContent_Declare(
-    argparse
-    GIT_REPOSITORY https://github.com/p-ranav/argparse.git
-    GIT_TAG v3.2
+    cargs
+    GIT_REPOSITORY https://github.com/likle/cargs.git
+    GIT_TAG v1.2.0
     GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(argparse)
+FetchContent_MakeAvailable(cargs)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(JSONC REQUIRED IMPORTED_TARGET json-c)
@@ -35,8 +35,5 @@ add_executable(nam
     src/main.cpp
     src/model.cpp
     src/wav.cpp)
-target_link_libraries(nam PRIVATE argparse ggml PkgConfig::JSONC)
-target_compile_options(nam PRIVATE -Wall -Wextra -Wpedantic)
-set_source_files_properties(
-    src/inference.cpp src/model.cpp src/wav.cpp
-    PROPERTIES COMPILE_OPTIONS -fno-exceptions)
+target_link_libraries(nam PRIVATE cargs ggml PkgConfig::JSONC)
+target_compile_options(nam PRIVATE -Wall -Wextra -Wpedantic -fno-exceptions)
