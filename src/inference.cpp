@@ -1,5 +1,6 @@
 #include "inference.h"
 
+#include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
 #include "ggml.h"
@@ -18,32 +19,35 @@ static ggml_tensor *right(ggml_context *c, ggml_tensor *x, int64_t n) {
 }
 
 static ggml_tensor *
-make_weight(ggml_context *c, const Conv &v,
+make_weight(ggml_context *cw, const Conv &v,
             std::vector<std::pair<ggml_tensor *, const float *>> &loads) {
-  auto *t = ggml_new_tensor_3d(c, GGML_TYPE_F32, v.kernel, v.in, v.out);
+  auto *t = ggml_new_tensor_3d(cw, GGML_TYPE_F32, v.kernel, v.in, v.out);
   loads.push_back({t, nullptr});
   return t;
 }
 
 static ggml_tensor *
-conv(ggml_context *c, ggml_tensor *x, const Conv &v, const Model &m,
+conv(ggml_context *cw, ggml_context *cg, ggml_tensor *x, const Conv &v,
+     const Model &m,
      std::vector<std::pair<ggml_tensor *, const float *>> &loads) {
-  auto *w = make_weight(c, v, loads);
+  auto *w = make_weight(cw, v, loads);
   loads.back().second = m.weights.data() + v.offset;
-  auto *y = ggml_conv_1d(c, w, x, 1, 0, v.dilation);
+  auto *y = ggml_conv_1d(cg, w, x, 1, 0, v.dilation);
   if (v.bias) {
-    auto *b = ggml_new_tensor_2d(c, GGML_TYPE_F32, 1, v.out);
+    auto *b = ggml_new_tensor_2d(cw, GGML_TYPE_F32, 1, v.out);
     loads.push_back(
         {b, m.weights.data() + v.offset + size_t(v.in) * v.out * v.kernel});
-    y = ggml_add(c, y, b);
+    y = ggml_add(cg, y, b);
   }
   return y;
 }
 
 struct GraphSession {
   ggml_backend_t backend = nullptr;
-  ggml_context *ctx = nullptr;
-  ggml_backend_buffer_t buffer = nullptr;
+  ggml_context *ctx_w = nullptr;
+  ggml_context *ctx_g = nullptr;
+  ggml_backend_buffer_t weight_buffer = nullptr;
+  ggml_gallocr_t galloc = nullptr;
   ggml_cgraph *graph = nullptr;
   ggml_tensor *input = nullptr;
   ggml_tensor *output = nullptr;
@@ -57,44 +61,54 @@ struct GraphSession {
     }
     ggml_backend_cpu_set_n_threads(backend, threads);
     ggml_init_params ip{64 * 1024 * 1024, nullptr, true};
-    ctx = ggml_init(ip);
-    if (!ctx) {
+    ctx_w = ggml_init(ip);
+    ctx_g = ggml_init(ip);
+    if (!ctx_w || !ctx_g) {
       std::fprintf(stderr, "ggml_init failed\n");
       std::abort();
     }
 
-    input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, input_size, 1);
+    input = ggml_new_tensor_2d(ctx_g, GGML_TYPE_F32, input_size, 1);
+    ggml_set_input(input);
     ggml_tensor *x = input, *condition = input, *head_sum = nullptr;
     for (const auto &a : m.arrays) {
-      x = conv(ctx, x, a.rechannel, m, loads);
+      x = conv(ctx_w, ctx_g, x, a.rechannel, m, loads);
       int out_no_head = int(std::min(x->ne[0], condition->ne[0]) -
                             (a.receptive - a.head.kernel));
       for (const auto &l : a.layers) {
-        auto *z = conv(ctx, x, l.conv, m, loads);
-        auto *mix =
-            right(ctx, conv(ctx, condition, l.mixer, m, loads), z->ne[0]);
-        z = ggml_add(ctx, z, mix);
-        z = (l.activation == "ReLU") ? ggml_relu(ctx, z) : ggml_tanh(ctx, z);
-        auto *term = right(ctx, z, out_no_head);
-        head_sum = head_sum
-                       ? ggml_add(ctx, right(ctx, head_sum, out_no_head), term)
-                       : term;
-        auto *res = conv(ctx, z, l.layer1x1, m, loads);
-        x = ggml_add(ctx, right(ctx, x, res->ne[0]), res);
+        auto *z = conv(ctx_w, ctx_g, x, l.conv, m, loads);
+        auto *mix = right(
+            ctx_g, conv(ctx_w, ctx_g, condition, l.mixer, m, loads), z->ne[0]);
+        z = ggml_add(ctx_g, z, mix);
+        z = (l.activation == "ReLU") ? ggml_relu(ctx_g, z)
+                                     : ggml_tanh(ctx_g, z);
+        auto *term = right(ctx_g, z, out_no_head);
+        head_sum =
+            head_sum
+                ? ggml_add(ctx_g, right(ctx_g, head_sum, out_no_head), term)
+                : term;
+        auto *res = conv(ctx_w, ctx_g, z, l.layer1x1, m, loads);
+        x = ggml_add(ctx_g, right(ctx_g, x, res->ne[0]), res);
       }
-      head_sum = conv(ctx, head_sum, a.head, m, loads);
-      x = right(ctx, x, head_sum->ne[0]);
+      head_sum = conv(ctx_w, ctx_g, head_sum, a.head, m, loads);
+      x = right(ctx_g, x, head_sum->ne[0]);
     }
-    output = ggml_scale(ctx, head_sum, m.head_scale);
-    graph = ggml_new_graph_custom(ctx, 4096, false);
+    output = ggml_scale(ctx_g, head_sum, m.head_scale);
+    ggml_set_output(output);
+    graph = ggml_new_graph_custom(ctx_g, 4096, false);
     ggml_build_forward_expand(graph, output);
-    buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
-    if (!buffer) {
-      std::fprintf(stderr, "Failed to allocate the ggml backend buffer\n");
+    weight_buffer = ggml_backend_alloc_ctx_tensors(ctx_w, backend);
+    if (!weight_buffer) {
+      std::fprintf(stderr, "Failed to allocate the ggml weight buffer\n");
       std::abort();
     }
     for (const auto &p : loads) {
       ggml_backend_tensor_set(p.first, p.second, 0, ggml_nbytes(p.first));
+    }
+    galloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
+    if (!galloc || !ggml_gallocr_alloc_graph(galloc, graph)) {
+      std::fprintf(stderr, "Failed to allocate the ggml compute graph\n");
+      std::abort();
     }
   }
 
@@ -117,11 +131,17 @@ struct GraphSession {
   }
 
   ~GraphSession() {
-    if (buffer) {
-      ggml_backend_buffer_free(buffer);
+    if (galloc) {
+      ggml_gallocr_free(galloc);
     }
-    if (ctx) {
-      ggml_free(ctx);
+    if (weight_buffer) {
+      ggml_backend_buffer_free(weight_buffer);
+    }
+    if (ctx_w) {
+      ggml_free(ctx_w);
+    }
+    if (ctx_g) {
+      ggml_free(ctx_g);
     }
     if (backend) {
       ggml_backend_free(backend);
