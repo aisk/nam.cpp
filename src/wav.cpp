@@ -19,6 +19,9 @@ static uint16_t u16(std::istream &f) {
 
 Wav read_wav(const std::string &path) {
   std::ifstream f(path, std::ios::binary);
+  f.seekg(0, std::ios::end);
+  std::streamoff fsize = f.tellg();
+  f.seekg(0);
   char id[4];
   f.read(id, 4);
   (void)u32(f);
@@ -49,6 +52,10 @@ Wav read_wav(const std::string &path) {
         format = u16(f);
       }
     } else if (!std::memcmp(id, "data", 4)) {
+      if (std::streamoff(n) > fsize - f.tellg()) {
+        std::fprintf(stderr, "Truncated WAV data chunk\n");
+        std::abort();
+      }
       data.resize(n);
       f.read(data.data(), n);
     }
@@ -66,6 +73,10 @@ Wav read_wav(const std::string &path) {
 
 void Wav::write(const std::string &path) const {
   std::ofstream f(path, std::ios::binary);
+  if (!f) {
+    std::fprintf(stderr, "Failed to open output WAV: %s\n", path.c_str());
+    std::abort();
+  }
   uint32_t bytes = uint32_t(samples.size() * 4), riff = 36 + bytes;
   uint16_t one = 1, fmt = 3, bits = 32, align = 4;
   uint32_t br = rate * 4, fs = 16;
@@ -82,4 +93,9 @@ void Wav::write(const std::string &path) const {
   f.write("data", 4);
   f.write((char *)&bytes, 4);
   f.write((char *)samples.data(), bytes);
+  f.flush();
+  if (!f) {
+    std::fprintf(stderr, "Failed to write output WAV: %s\n", path.c_str());
+    std::abort();
+  }
 }

@@ -6,6 +6,7 @@
 
 #include <cerrno>
 #include <climits>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
@@ -91,6 +92,13 @@ int main(int argc, char **argv) {
 
   Model m = load_model(pos[0]);
   Wav w = read_wav(pos[1]);
+  if (m.sample_rate > 0 && w.rate != uint32_t(m.sample_rate)) {
+    std::fprintf(stderr,
+                 "nam: input sample rate %u Hz does not match the model's "
+                 "%d Hz (resample the input first)\n",
+                 w.rate, m.sample_rate);
+    return 1;
+  }
   w.samples = block == 0 ? infer(m, w.samples, threads)
                          : infer_streaming(m, w.samples, threads, size_t(block));
   w.write(pos[2]);

@@ -28,6 +28,7 @@ struct Model {
   std::vector<float> weights;
   float head_scale = 1;
   int receptive = 1;
+  int sample_rate = -1; // -1 when the file does not declare one
 };
 
 Model load_model(const std::string &path);

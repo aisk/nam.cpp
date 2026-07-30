@@ -14,10 +14,14 @@ static json_object *get(json_object *o, const char *key) {
   return v;
 }
 
-static int get_int(json_object *o, const char *key, int fallback = -1) {
+static int get_int(json_object *o, const char *key, int fallback) {
   json_object *v = nullptr;
   return json_object_object_get_ex(o, key, &v) ? json_object_get_int(v)
                                                 : fallback;
+}
+
+static int require_int(json_object *o, const char *key) {
+  return json_object_get_int(get(o, key));
 }
 
 static bool get_bool(json_object *o, const char *key, bool fallback) {
@@ -35,6 +39,12 @@ static std::string get_str(json_object *v) {
 }
 
 void Conv::take(size_t &p) {
+  if (in <= 0 || out <= 0 || kernel <= 0 || dilation <= 0) {
+    std::fprintf(stderr,
+                 "Invalid conv shape (in=%d, out=%d, kernel=%d, dilation=%d)\n",
+                 in, out, kernel, dilation);
+    std::abort();
+  }
   offset = p;
   p += size_t(in) * out * kernel + (bias ? out : 0);
 }
@@ -59,6 +69,11 @@ Model load_model(const std::string &path) {
   json_object *cfg = get(root, "config"), *wa = get(root, "weights"),
               *as = get(cfg, "layers");
   Model m;
+  json_object *sr = nullptr;
+  if (json_object_object_get_ex(root, "sample_rate", &sr) &&
+      json_object_get_double(sr) > 0) {
+    m.sample_rate = int(json_object_get_double(sr));
+  }
   m.weights.reserve(json_object_array_length(wa));
   for (size_t i = 0; i < json_object_array_length(wa); ++i) {
     m.weights.push_back(
@@ -70,8 +85,9 @@ Model load_model(const std::string &path) {
     json_object *ds = get(a, "dilations");
     json_object *hc = nullptr;
     json_object_object_get_ex(a, "head", &hc);
-    int input = get_int(a, "input_size"), cond = get_int(a, "condition_size"),
-        ch = get_int(a, "channels"), bottleneck = get_int(a, "bottleneck", ch);
+    int input = require_int(a, "input_size"),
+        cond = require_int(a, "condition_size"), ch = require_int(a, "channels"),
+        bottleneck = get_int(a, "bottleneck", ch);
     if (cond != 1 || get_int(a, "groups_input", 1) != 1 ||
         get_int(a, "groups_input_mixin", 1) != 1) {
       std::fprintf(stderr,
@@ -95,9 +111,9 @@ Model load_model(const std::string &path) {
     Array ar;
     ar.rechannel = {input, ch, 1, 1, false, 0};
     ar.rechannel.take(p);
-    int common_k = get_int(a, "kernel_size", -1);
     json_object *ks = nullptr;
     json_object_object_get_ex(a, "kernel_sizes", &ks);
+    int common_k = ks ? -1 : require_int(a, "kernel_size");
     for (size_t li = 0; li < json_object_array_length(ds); ++li) {
       int d = json_object_get_int(json_object_array_get_idx(ds, li));
       int k = ks ? json_object_get_int(json_object_array_get_idx(ks, li))
@@ -113,10 +129,11 @@ Model load_model(const std::string &path) {
       ar.receptive += (k - 1) * d;
     }
     if (hc != nullptr) {
-      ar.head = {bottleneck, get_int(hc, "out_channels"), get_int(hc, "kernel_size"),
-                 1,           get_bool(hc, "bias", false), 0};
+      ar.head = {bottleneck,  require_int(hc, "out_channels"),
+                 require_int(hc, "kernel_size"), 1,
+                 get_bool(hc, "bias", false), 0};
     } else {
-      ar.head = {bottleneck, get_int(a, "head_size"),     1,
+      ar.head = {bottleneck, require_int(a, "head_size"), 1,
                  1,           get_bool(a, "head_bias", false), 0};
     }
     ar.head.take(p);
